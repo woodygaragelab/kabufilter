@@ -1,0 +1,15 @@
+# 株価データ（大量のCSVファイル）
+data/
+
+# Excelファイル（個人データ）
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# OS
+Thumbs.db
+desktop.ini

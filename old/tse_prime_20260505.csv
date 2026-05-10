@@ -1,0 +1,11 @@
+Code,Date,Close,Volume
+7203,2026-05-01,"Ticker
+7203.T    3000.0
+Name: 2026-05-01 00:00:00, dtype: float64","Ticker
+7203.T    21904100.0
+Name: 2026-05-01 00:00:00, dtype: float64"
+7267,2026-05-01,"Ticker
+7267.T    1262.5
+Name: 2026-05-01 00:00:00, dtype: float64","Ticker
+7267.T    14005300.0
+Name: 2026-05-01 00:00:00, dtype: float64"
