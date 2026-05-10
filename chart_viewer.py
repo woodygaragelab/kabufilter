@@ -190,25 +190,7 @@ class ChartApp(tk.Tk):
         top = tk.Frame(self, bg="#1e1e2e", pady=8)
         top.pack(fill=tk.X, padx=12)
 
-        tk.Label(top, text="銘柄コード:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
-            side=tk.LEFT
-        )
         self.code_var = tk.StringVar(value="7203")
-        entry = ttk.Entry(top, textvariable=self.code_var, width=16, font=("", 17))
-        entry.pack(side=tk.LEFT, padx=6)
-        entry.bind("<Return>", lambda _: self._download_and_show())
-
-        btn = tk.Button(
-            top,
-            text="表示",
-            command=self._download_and_show,
-            bg="#89b4fa",
-            fg="#1e1e2e",
-            font=("", 17, "bold"),
-            relief=tk.FLAT,
-            padx=12,
-        )
-        btn.pack(side=tk.LEFT)
 
         tk.Label(top, text="倍率:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
             side=tk.LEFT, padx=(16, 0)
