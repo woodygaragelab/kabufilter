@@ -186,47 +186,8 @@ class ChartApp(tk.Tk):
         self._build_ui()
 
     def _build_ui(self):
-        # 上部入力エリア
-        top = tk.Frame(self, bg="#1e1e2e", pady=8)
-        top.pack(fill=tk.X, padx=12)
-
-        self.code_var = tk.StringVar(value="7203")
-
-        tk.Label(top, text="倍率:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
-            side=tk.LEFT, padx=(16, 0)
-        )
+        self.code_var  = tk.StringVar(value="7203")
         self.ratio_var = tk.StringVar(value="2.0")
-        ratio_cb = ttk.Combobox(
-            top, textvariable=self.ratio_var,
-            values=["1.5", "2.0", "3.0", "4.0"], width=4, font=("", 17), state="readonly"
-        )
-        ratio_cb.pack(side=tk.LEFT, padx=4)
-        ratio_cb.bind("<<ComboboxSelected>>", lambda _: self._show_chart())
-
-        tk.Label(top, text="分類:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
-            side=tk.LEFT, padx=(16, 0)
-        )
-        self.category_var = tk.StringVar()
-        cat_entry = ttk.Entry(top, textvariable=self.category_var, width=12, font=("", 17))
-        cat_entry.pack(side=tk.LEFT, padx=4)
-        cat_entry.bind("<Return>", lambda _: self._save_category())
-
-        cat_btn = tk.Button(
-            top,
-            text="保存",
-            command=self._save_category,
-            bg="#a6e3a1",
-            fg="#1e1e2e",
-            font=("", 17, "bold"),
-            relief=tk.FLAT,
-            padx=10,
-        )
-        cat_btn.pack(side=tk.LEFT)
-
-        self.status = tk.Label(
-            top, text="", bg="#1e1e2e", fg="#f38ba8", font=("", 16)
-        )
-        self.status.pack(side=tk.LEFT, padx=10)
 
         # メインエリア（左リスト＋右チャート）
         content = tk.Frame(self, bg="#1e1e2e")
@@ -237,9 +198,17 @@ class ChartApp(tk.Tk):
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(12, 0), pady=4)
         left.pack_propagate(False)
 
-        tk.Label(
-            left, text="銘柄リスト", bg="#181825", fg="#cdd6f4", font=("", 16, "bold")
-        ).pack(pady=(6, 2))
+        cb_frame = tk.Frame(left, bg="#181825")
+        cb_frame.pack(pady=(6, 2))
+        self.cat1_var = tk.BooleanVar()
+        self.cat2_var = tk.BooleanVar()
+        ckb_opts = dict(bg="#181825", fg="#cdd6f4", selectcolor="#181825",
+                        activebackground="#181825", activeforeground="#cdd6f4",
+                        font=("", 14), command=self._apply_filter)
+        tk.Checkbutton(cb_frame, text="分類1", variable=self.cat1_var, **ckb_opts).pack(
+            side=tk.LEFT, padx=(8, 4))
+        tk.Checkbutton(cb_frame, text="分類2", variable=self.cat2_var, **ckb_opts).pack(
+            side=tk.LEFT, padx=(4, 8))
 
         # 列ごとのフィルタ入力欄
         self._filter_frame = tk.Frame(left, bg="#181825")
@@ -316,6 +285,47 @@ class ChartApp(tk.Tk):
         # 右パネル：チャート
         right = tk.Frame(content, bg="#1e1e2e")
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        chart_top = tk.Frame(right, bg="#1e1e2e")
+        chart_top.pack(fill=tk.X, pady=(2, 0))
+
+        # 右端：分類チェックボックス・保存（RIGHT から積む）
+        self.category_var = tk.StringVar()
+        tk.Button(
+            chart_top,
+            text="保存",
+            command=self._save_category,
+            bg="#a6e3a1",
+            fg="#1e1e2e",
+            font=("", 17, "bold"),
+            relief=tk.FLAT,
+            padx=10,
+        ).pack(side=tk.RIGHT, padx=(0, 4))
+        self.chart_cat2_var = tk.BooleanVar()
+        self.chart_cat1_var = tk.BooleanVar()
+        ckb_opts = dict(bg="#1e1e2e", fg="#cdd6f4", selectcolor="#1e1e2e",
+                        activebackground="#1e1e2e", activeforeground="#cdd6f4",
+                        font=("", 14), command=self._on_chart_cat_toggle)
+        tk.Checkbutton(chart_top, text="分類2", variable=self.chart_cat2_var, **ckb_opts).pack(
+            side=tk.RIGHT, padx=(0, 4))
+        tk.Checkbutton(chart_top, text="分類1", variable=self.chart_cat1_var, **ckb_opts).pack(
+            side=tk.RIGHT, padx=(8, 4))
+
+        # 左：ステータス → 倍率
+        self.status = tk.Label(
+            chart_top, text="", bg="#1e1e2e", fg="#f38ba8", font=("", 16)
+        )
+        self.status.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(chart_top, text="倍率:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ratio_cb = ttk.Combobox(
+            chart_top, textvariable=self.ratio_var,
+            values=["1.5", "2.0", "3.0", "4.0"], width=4, font=("", 17), state="readonly"
+        )
+        ratio_cb.pack(side=tk.LEFT, padx=4)
+        ratio_cb.bind("<<ComboboxSelected>>", lambda _: self._show_chart())
 
         plt.style.use("dark_background")
         self.fig, (self.ax_price, self.ax_vol) = plt.subplots(
@@ -418,11 +428,15 @@ class ChartApp(tk.Tk):
         code_q = self.code_filter_var.get().strip().lower()
         name_q = self.name_filter_var.get().strip().lower()
         cat_q  = self.cat_filter_var.get().strip().lower()
+        cb1 = self.cat1_var.get()
+        cb2 = self.cat2_var.get()
         self._filtered_codes = [
             (c, n, cat, dd) for c, n, cat, dd in self._codes
             if (not code_q or code_q in c.lower())
             and (not name_q or name_q in n.lower())
             and (not cat_q  or cat_q  in cat.lower())
+            and (not cb1 or "1" in cat)
+            and (not cb2 or "2" in cat)
         ]
         # 選択コードを保存（tree 選択 → code_var の順で参照）
         sel = self.tree.selection()
@@ -445,14 +459,21 @@ class ChartApp(tk.Tk):
         mc = self._read_excel()
         if mc is None:
             self.category_var.set("")
+            self.chart_cat1_var.set(False)
+            self.chart_cat2_var.set(False)
             return
         mc["Code"] = mc["Code"].str.zfill(4)
         row = mc[mc["Code"] == code]
         if not row.empty and "Category" in mc.columns:
             val = row["Category"].iloc[0]
-            self.category_var.set("" if pd.isna(val) else str(val))
+            val = "" if pd.isna(val) else str(val)
+            self.category_var.set(val)
+            self.chart_cat1_var.set("1" in val)
+            self.chart_cat2_var.set("2" in val)
         else:
             self.category_var.set("")
+            self.chart_cat1_var.set(False)
+            self.chart_cat2_var.set(False)
 
     def _update_excel_row(self, code: str, updates: dict):
         import openpyxl
@@ -494,6 +515,12 @@ class ChartApp(tk.Tk):
                 wb.save(path)
             except Exception:
                 pass
+
+    def _on_chart_cat_toggle(self):
+        cat = ("1" if self.chart_cat1_var.get() else "") + \
+              ("2" if self.chart_cat2_var.get() else "")
+        self.category_var.set(cat)
+        self._save_category()
 
     def _save_category(self):
         code = self.code_var.get().strip()
