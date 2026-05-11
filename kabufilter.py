@@ -176,7 +176,7 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
 class ChartApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("株価チャートビューア")
+        self.title("kabufilter")
         self.geometry("1400x800")
         self.configure(bg="#1e1e2e")
         self._xlsx_lock            = threading.Lock()
