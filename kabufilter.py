@@ -200,8 +200,8 @@ class ChartApp(tk.Tk):
 
         cb_frame = tk.Frame(left, bg="#181825")
         cb_frame.pack(pady=(6, 2))
-        self.cat1_var = tk.BooleanVar()
-        self.cat2_var = tk.BooleanVar()
+        self.cat1_var = tk.BooleanVar(value=True)
+        self.cat2_var = tk.BooleanVar(value=True)
         ckb_opts = dict(bg="#181825", fg="#cdd6f4", selectcolor="#181825",
                         activebackground="#181825", activeforeground="#cdd6f4",
                         font=("", 14), command=self._apply_filter)
