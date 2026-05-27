@@ -47,6 +47,7 @@ def calc_stats(df: pd.DataFrame) -> dict:
     close = df["Close"].iloc[-1]
     ma25  = df["Close"].rolling(25).mean().iloc[-1]
     ma75  = df["Close"].rolling(75).mean().iloc[-1]
+    ma200 = df["Close"].rolling(200).mean().iloc[-1]
     tv    = df["Volume"] * df["Close"] / 1e8
     tv25  = tv.rolling(25).mean().iloc[-1]
     tv75  = tv.rolling(75).mean().iloc[-1]
@@ -60,6 +61,7 @@ def calc_stats(df: pd.DataFrame) -> dict:
         "Close":          _r(close),
         "MA25":           _r(ma25),
         "MA75":           _r(ma75),
+        "MA200":          _r(ma200),
         "Turnover":       _r(tv.iloc[-1]),
         "TurnoverMA25":   _r(tv25),
         "TurnoverMA75":   _r(tv75),
@@ -117,7 +119,7 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
         ax_vol.add_patch(bar)
 
     # 移動平均線
-    for window, color in [(25, "#f9e2af"), (75, "#89dceb")]:
+    for window, color in [(25, "#f9e2af"), (75, "#89dceb"), (200, "#cba6f7")]:
         ma = df["Close"].rolling(window).mean()
         valid = ma.notna()
         if valid.any():
@@ -150,7 +152,7 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
         turnover = df["Volume"] * df["Close"] / 1e8
         turnover_max = turnover.max()
         ax_vol.set_ylim(0, turnover_max * 1.2)
-        for window, color in [(25, "#f9e2af"), (75, "#89dceb")]:
+        for window, color in [(25, "#f9e2af"), (75, "#89dceb"), (200, "#cba6f7")]:
             ma = turnover.rolling(window).mean()
             valid = ma.notna()
             if valid.any():
@@ -202,13 +204,29 @@ class ChartApp(tk.Tk):
         cb_frame.pack(pady=(6, 2))
         self.cat1_var = tk.BooleanVar(value=True)
         self.cat2_var = tk.BooleanVar(value=True)
+        self.cat3_var = tk.BooleanVar(value=True)
+        self.cat4_var = tk.BooleanVar(value=True)
         ckb_opts = dict(bg="#181825", fg="#cdd6f4", selectcolor="#181825",
                         activebackground="#181825", activeforeground="#cdd6f4",
                         font=("", 14), command=self._apply_filter)
-        tk.Checkbutton(cb_frame, text="分類1", variable=self.cat1_var, **ckb_opts).pack(
+        tk.Checkbutton(cb_frame, text="1", variable=self.cat1_var, **ckb_opts).pack(
             side=tk.LEFT, padx=(8, 4))
-        tk.Checkbutton(cb_frame, text="分類2", variable=self.cat2_var, **ckb_opts).pack(
+        tk.Checkbutton(cb_frame, text="2", variable=self.cat2_var, **ckb_opts).pack(
+            side=tk.LEFT, padx=(4, 4))
+        tk.Checkbutton(cb_frame, text="3", variable=self.cat3_var, **ckb_opts).pack(
+            side=tk.LEFT, padx=(4, 4))
+        tk.Checkbutton(cb_frame, text="4", variable=self.cat4_var, **ckb_opts).pack(
             side=tk.LEFT, padx=(4, 8))
+        tk.Button(
+            cb_frame,
+            text="DL",
+            command=self._force_download,
+            bg="#89b4fa",
+            fg="#1e1e2e",
+            font=("", 13, "bold"),
+            relief=tk.FLAT,
+            padx=6,
+        ).pack(side=tk.LEFT, padx=(4, 8))
 
         # 列ごとのフィルタ入力欄
         self._filter_frame = tk.Frame(left, bg="#181825")
@@ -301,11 +319,17 @@ class ChartApp(tk.Tk):
             relief=tk.FLAT,
             padx=10,
         ).pack(side=tk.RIGHT, padx=(0, 4))
+        self.chart_cat4_var = tk.BooleanVar()
+        self.chart_cat3_var = tk.BooleanVar()
         self.chart_cat2_var = tk.BooleanVar()
         self.chart_cat1_var = tk.BooleanVar()
         ckb_opts = dict(bg="#1e1e2e", fg="#cdd6f4", selectcolor="#1e1e2e",
                         activebackground="#1e1e2e", activeforeground="#cdd6f4",
                         font=("", 14), command=self._on_chart_cat_toggle)
+        tk.Checkbutton(chart_top, text="分類4", variable=self.chart_cat4_var, **ckb_opts).pack(
+            side=tk.RIGHT, padx=(0, 4))
+        tk.Checkbutton(chart_top, text="分類3", variable=self.chart_cat3_var, **ckb_opts).pack(
+            side=tk.RIGHT, padx=(0, 4))
         tk.Checkbutton(chart_top, text="分類2", variable=self.chart_cat2_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
         tk.Checkbutton(chart_top, text="分類1", variable=self.chart_cat1_var, **ckb_opts).pack(
@@ -430,6 +454,8 @@ class ChartApp(tk.Tk):
         cat_q  = self.cat_filter_var.get().strip().lower()
         cb1 = self.cat1_var.get()
         cb2 = self.cat2_var.get()
+        cb3 = self.cat3_var.get()
+        cb4 = self.cat4_var.get()
         self._filtered_codes = [
             (c, n, cat, dd) for c, n, cat, dd in self._codes
             if (not code_q or code_q in c.lower())
@@ -437,6 +463,8 @@ class ChartApp(tk.Tk):
             and (not cat_q  or cat_q  in cat.lower())
             and (not cb1 or "1" in cat)
             and (not cb2 or "2" in cat)
+            and (not cb3 or "3" in cat)
+            and (not cb4 or "4" in cat)
         ]
         # 選択コードを保存（tree 選択 → code_var の順で参照）
         sel = self.tree.selection()
@@ -470,10 +498,14 @@ class ChartApp(tk.Tk):
             self.category_var.set(val)
             self.chart_cat1_var.set("1" in val)
             self.chart_cat2_var.set("2" in val)
+            self.chart_cat3_var.set("3" in val)
+            self.chart_cat4_var.set("4" in val)
         else:
             self.category_var.set("")
             self.chart_cat1_var.set(False)
             self.chart_cat2_var.set(False)
+            self.chart_cat3_var.set(False)
+            self.chart_cat4_var.set(False)
 
     def _update_excel_row(self, code: str, updates: dict):
         import openpyxl
@@ -518,7 +550,9 @@ class ChartApp(tk.Tk):
 
     def _on_chart_cat_toggle(self):
         cat = ("1" if self.chart_cat1_var.get() else "") + \
-              ("2" if self.chart_cat2_var.get() else "")
+              ("2" if self.chart_cat2_var.get() else "") + \
+              ("3" if self.chart_cat3_var.get() else "") + \
+              ("4" if self.chart_cat4_var.get() else "")
         self.category_var.set(cat)
         self._save_category()
 
@@ -533,6 +567,48 @@ class ChartApp(tk.Tk):
     def _refresh_listbox(self):
         self._codes = self._load_my_codes()
         self._apply_filter()
+
+    def _force_download(self):
+        codes = [c for c, *_ in self._filtered_codes]
+        if not codes:
+            return
+        total = len(codes)
+        self.status.config(text=f"0 / {total} ダウンロード中...")
+        self.update_idletasks()
+
+        def task():
+            from datetime import datetime
+            errors = []
+            for i, code in enumerate(codes, 1):
+                self.after(0, lambda i=i, c=code: self.status.config(
+                    text=f"{i} / {total}  {c} ダウンロード中..."))
+                try:
+                    ticker = f"{code}.T"
+                    data = yf.download(ticker, period="800d", interval="1d", progress=False)
+                    if data.empty:
+                        errors.append(code)
+                        continue
+                    data = data.tail(400)
+                    data.to_csv(os.path.join(DATA_DIR, f"{code}.csv"))
+                    self._update_excel_row(code, {"DataDate": datetime.today().replace(
+                        hour=0, minute=0, second=0, microsecond=0)})
+                except Exception:
+                    errors.append(code)
+                    continue
+                try:
+                    self._save_stats(code, data)
+                except Exception:
+                    pass
+
+            self.after(0, self._refresh_listbox)
+            self.after(0, self._show_chart)
+            if errors:
+                msg = f"完了（失敗 {len(errors)} 件: {', '.join(errors[:5])}{'…' if len(errors) > 5 else ''}）"
+            else:
+                msg = f"{total} 件のダウンロードが完了しました"
+            self.after(0, lambda: self.status.config(text=msg))
+
+        threading.Thread(target=task, daemon=True).start()
 
     def _download_and_show(self):
         code = self.code_var.get().strip()
@@ -549,14 +625,15 @@ class ChartApp(tk.Tk):
         def task():
             try:
                 ticker = f"{code}.T"
-                data = yf.download(ticker, period="400d", interval="1d", progress=False)
+                data = yf.download(ticker, period="800d", interval="1d", progress=False)
                 if data.empty:
                     self.after(0, lambda: self.status.config(text=f"データ取得失敗: {ticker}"))
                     return
-                data = data.tail(275)
+                data = data.tail(400)
                 data.to_csv(os.path.join(DATA_DIR, f"{code}.csv"))
                 from datetime import datetime
                 self._update_excel_row(code, {"DataDate": datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)})
+                self._save_stats(code, data)
                 self.after(0, self._refresh_listbox)
                 self.after(0, self._show_chart)
             except Exception as e:
@@ -649,7 +726,6 @@ class ChartApp(tk.Tk):
             draw_candlestick(self.ax_price, self.ax_vol, df, code, name, ratio=float(self.ratio_var.get()))
             self._init_crosshair()
             self.canvas.draw()
-            self._save_stats(code, df)
             self.status.config(text=f"{len(df)}件のデータを読み込みました")
         except FileNotFoundError as e:
             self.status.config(text=str(e))
@@ -658,15 +734,12 @@ class ChartApp(tk.Tk):
 
     def _save_stats(self, code: str, df: pd.DataFrame):
         stats = calc_stats(df)
-        category = next((tup[2] for tup in self._codes if tup[0] == code), "")
-        add_chars = ""
-        if stats.get("TV75Above10") and "1" not in category:
-            add_chars += "1"
-        if stats.get("Trend") and "2" not in category:
-            add_chars += "2"
-        if add_chars:
-            stats["Category"] = "".join(sorted(set(category.strip() + add_chars)))
-            self.after(0, self._refresh_listbox)
+        new_cat = ""
+        if stats.get("TV75Above10"):
+            new_cat += "1"
+        if stats.get("Trend"):
+            new_cat += "2"
+        stats["Category"] = new_cat
         self._update_excel_row(code, stats)
 
 
