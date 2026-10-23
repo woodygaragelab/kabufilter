@@ -596,7 +596,7 @@ class ChartApp(tk.Tk):
                     errors.append(code)
                     continue
                 try:
-                    self._save_stats(code, data)
+                    self._save_stats(code, load_csv(code))
                 except Exception:
                     pass
 
@@ -633,7 +633,7 @@ class ChartApp(tk.Tk):
                 data.to_csv(os.path.join(DATA_DIR, f"{code}.csv"))
                 from datetime import datetime
                 self._update_excel_row(code, {"DataDate": datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)})
-                self._save_stats(code, data)
+                self._save_stats(code, load_csv(code))
                 self.after(0, self._refresh_listbox)
                 self.after(0, self._show_chart)
             except Exception as e:
@@ -739,6 +739,15 @@ class ChartApp(tk.Tk):
             new_cat += "1"
         if stats.get("Trend"):
             new_cat += "2"
+        # 手動設定の分類3・4は保持する
+        mc = self._read_excel()
+        if mc is not None and "Category" in mc.columns:
+            mc["Code"] = mc["Code"].str.zfill(4)
+            row = mc[mc["Code"] == code]
+            if not row.empty:
+                old = row["Category"].iloc[0]
+                old = "" if pd.isna(old) else str(old)
+                new_cat += "".join(c for c in "34" if c in old)
         stats["Category"] = new_cat
         self._update_excel_row(code, stats)
 
