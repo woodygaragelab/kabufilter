@@ -299,6 +299,9 @@ class ChartApp(tk.Tk):
         self.after_idle(self._sync_filter_columns)
         self.bind("<Up>",   self._on_key_nav)
         self.bind("<Down>", self._on_key_nav)
+        # Treeview 標準の↑↓移動との二重移動を防ぐ（"break" で標準処理を止める）
+        self.tree.bind("<Up>",   self._on_key_nav)
+        self.tree.bind("<Down>", self._on_key_nav)
 
         # 右パネル：チャート
         right = tk.Frame(content, bg="#1e1e2e")
@@ -416,11 +419,20 @@ class ChartApp(tk.Tk):
         children = self.tree.get_children()
         if not children:
             return
+        # 表示中のリスト順で現在位置を求める（選択が無ければ code_var の銘柄を参照）
+        children = list(children)
         sel = self.tree.selection()
-        if not sel:
+        cur = sel[0] if sel else None
+        if cur is None:
+            code = self.code_var.get().strip().zfill(4)
+            for iid in children:
+                if str(self.tree.item(iid)["values"][0]).zfill(4) == code:
+                    cur = iid
+                    break
+        if cur is None:
             new_item = children[0] if event.keysym == "Down" else children[-1]
         else:
-            idx = list(children).index(sel[0])
+            idx = children.index(cur)
             if event.keysym == "Down":
                 idx = min(idx + 1, len(children) - 1)
             else:
