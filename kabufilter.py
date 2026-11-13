@@ -6,6 +6,7 @@ import matplotlib.dates as mdates
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 import os
 import signal
 import threading
@@ -17,7 +18,7 @@ matplotlib.rcParams["font.family"] = ["Yu Gothic", "Meiryo", "MS Gothic", "DejaV
 CHART_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(CHART_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
-
+VIEW_DAYS = 365  # チャートの表示期間（表示最終日までの日数）
 
 def load_csv(code: str) -> pd.DataFrame:
     filename = os.path.join(DATA_DIR, f"{code}.csv")
@@ -72,12 +73,66 @@ def calc_stats(df: pd.DataFrame) -> dict:
     }
 
 
-def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = "", ratio: float = 2.0):
+def update_period_title(ax_price):
+    """現在の表示範囲を YYYY/MM/DD-YYYY/MM/DD で右上に表示する。"""
+    x0, x1 = ax_price.get_xlim()
+    d0 = mdates.num2date(x0).strftime("%Y/%m/%d")
+    d1 = mdates.num2date(x1).strftime("%Y/%m/%d")
+    ax_price.set_title(f"{d0}-{d1}", loc="right", fontsize=14)
+
+
+def highlight_masks(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """分析用の判定を返す。
+    base:   MA5*1.02 > MA25 > MA75
+    strong: base かつ MA5*0.98 < MA25
+    weak:   strong かつ 終値 < MA25
+    """
+    ma5 = df["Close"].rolling(5).mean()
+    ma25 = df["Close"].rolling(25).mean()
+    ma75 = df["Close"].rolling(75).mean()
+    base = (ma5 * 1.02 > ma25) & (ma25 > ma75)
+    strong = base & (ma5 * 0.98 < ma25)
+    weak = strong & (df["Close"] < ma25)
+    return base, strong, weak
+
+
+def _span_runs(ax_list, dates, mask, alpha, color="#b8e6a0"):
+    """mask が True の連続区間ごとに背景の帯を引く。"""
+    i, n = 0, len(mask)
+    while i < n:
+        if mask[i]:
+            j = i
+            while j + 1 < n and mask[j + 1]:
+                j += 1
+            for ax in ax_list:
+                ax.axvspan(dates[i] - 0.5, dates[j] + 0.5, color=color, alpha=alpha, zorder=0, lw=0)
+            i = j + 1
+        else:
+            i += 1
+
+
+def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = "", ratio: float = 2.0, view_end=None,
+                     highlight: bool = False):
     ax_price.clear()
     ax_vol.clear()
 
     dates = mdates.date2num(df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
     width = 0.6
+
+    # 条件に合う日の背景を明るくする（連続する日はまとめて1つの帯にする）
+    if highlight:
+        base, strong, weak = highlight_masks(df)
+        axes = (ax_price, ax_vol)
+        # weak（終値 < MA25）の日は赤系だけで描き、黄緑とは混ぜない
+        green_base = (base & ~weak).to_numpy()
+        green_strong = (strong & ~weak).to_numpy()
+        red = weak.to_numpy()
+        _span_runs(axes, dates, green_base, 0.15)
+        # strong は重ね塗りでさらに明るくする
+        _span_runs(axes, dates, green_strong, 0.15)
+        # weak は赤系を2回重ね塗りして、黄緑の strong と同じ明るさにする
+        _span_runs(axes, dates, red, 0.15, color="#f38ba8")
+        _span_runs(axes, dates, red, 0.15, color="#f38ba8")
 
     for date, row in zip(dates, df.itertuples()):
         color = "#e74c3c" if row.Close >= row.Open else "#2ecc71"
@@ -119,7 +174,7 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
         ax_vol.add_patch(bar)
 
     # 移動平均線
-    for window, color in [(25, "#f9e2af"), (75, "#89dceb"), (200, "#cba6f7")]:
+    for window, color in [(5, "#a6e3a1"), (25, "#f38ba8"), (75, "#89dceb"), (200, "#cba6f7")]:
         ma = df["Close"].rolling(window).mean()
         valid = ma.notna()
         if valid.any():
@@ -134,13 +189,21 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
     ax_price.legend(fontsize=12, loc="upper left")
 
     # 軸設定
-    ax_price.set_xlim(dates[0] - 1, dates[-1] + 1)
-    price_max = df["High"].max()
+    # 表示期間：表示最終日までの VIEW_DAYS 日分（縦軸も表示期間内のデータで決める）
+    end_num = mdates.date2num(view_end if view_end is not None else df["Date"].iloc[-1])
+    start_num = end_num - VIEW_DAYS
+    ax_price.set_xlim(start_num, end_num + 1)
+    vis = (dates >= start_num) & (dates <= end_num)
+    if not vis.any():
+        vis[:] = True
+    vdf = df[vis]
+    price_max = vdf["High"].max()
     margin = price_max * 0.02
     y_top = price_max + margin
-    y_bottom = (df["Low"].min() - margin) if ratio <= 1.0 else (y_top / ratio)
+    y_bottom = (vdf["Low"].min() - margin) if ratio <= 1.0 else (y_top / ratio)
     ax_price.set_ylim(y_bottom, y_top)
     ax_price.set_title(f"{code}  {name}", fontsize=19)
+    update_period_title(ax_price)
     ax_price.set_ylabel("価格", fontsize=16)
     ax_price.tick_params(labelsize=15)
     ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%y/%m/%d"))
@@ -150,9 +213,9 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
     ax_vol.set_xlim(ax_price.get_xlim())
     if "Volume" in df.columns and df["Volume"].notna().any():
         turnover = df["Volume"] * df["Close"] / 1e8
-        turnover_max = turnover.max()
+        turnover_max = turnover[vis].max()
         ax_vol.set_ylim(0, turnover_max * 1.2)
-        for window, color in [(25, "#f9e2af"), (75, "#89dceb"), (200, "#cba6f7")]:
+        for window, color in [(25, "#f38ba8"), (75, "#89dceb"), (200, "#cba6f7")]:
             ma = turnover.rolling(window).mean()
             valid = ma.notna()
             if valid.any():
@@ -189,7 +252,7 @@ class ChartApp(tk.Tk):
 
     def _build_ui(self):
         self.code_var  = tk.StringVar(value="7203")
-        self.ratio_var = tk.StringVar(value="2.0")
+        self.ratio_var = tk.StringVar(value="4.0")
 
         # メインエリア（左リスト＋右チャート）
         content = tk.Frame(self, bg="#1e1e2e")
@@ -302,6 +365,9 @@ class ChartApp(tk.Tk):
         # Treeview 標準の↑↓移動との二重移動を防ぐ（"break" で標準処理を止める）
         self.tree.bind("<Up>",   self._on_key_nav)
         self.tree.bind("<Down>", self._on_key_nav)
+        for w in (self, self.tree):
+            w.bind("<Left>",  self._on_key_date)
+            w.bind("<Right>", self._on_key_date)
 
         # 右パネル：チャート
         right = tk.Frame(content, bg="#1e1e2e")
@@ -329,13 +395,13 @@ class ChartApp(tk.Tk):
         ckb_opts = dict(bg="#1e1e2e", fg="#cdd6f4", selectcolor="#1e1e2e",
                         activebackground="#1e1e2e", activeforeground="#cdd6f4",
                         font=("", 14), command=self._on_chart_cat_toggle)
-        tk.Checkbutton(chart_top, text="分類4", variable=self.chart_cat4_var, **ckb_opts).pack(
+        tk.Checkbutton(chart_top, text="監視(4)", variable=self.chart_cat4_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
-        tk.Checkbutton(chart_top, text="分類3", variable=self.chart_cat3_var, **ckb_opts).pack(
+        tk.Checkbutton(chart_top, text="注目(3)", variable=self.chart_cat3_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
-        tk.Checkbutton(chart_top, text="分類2", variable=self.chart_cat2_var, **ckb_opts).pack(
+        tk.Checkbutton(chart_top, text="上昇(2)", variable=self.chart_cat2_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
-        tk.Checkbutton(chart_top, text="分類1", variable=self.chart_cat1_var, **ckb_opts).pack(
+        tk.Checkbutton(chart_top, text="出来高(1)", variable=self.chart_cat1_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(8, 4))
 
         # 左：ステータス → 倍率
@@ -354,19 +420,31 @@ class ChartApp(tk.Tk):
         ratio_cb.pack(side=tk.LEFT, padx=4)
         ratio_cb.bind("<<ComboboxSelected>>", lambda _: self._show_chart())
 
+        self.analyze_on = False
+        self.analyze_btn = tk.Button(
+            chart_top, text="分析", command=self._on_analyze,
+            bg="#89b4fa", fg="#1e1e2e", font=("", 17, "bold"), relief=tk.FLAT, padx=10,
+        )
+        self.analyze_btn.pack(side=tk.LEFT, padx=4)
+
         plt.style.use("dark_background")
         self.fig, (self.ax_price, self.ax_vol) = plt.subplots(
             2, 1, figsize=(10, 6), gridspec_kw={"height_ratios": [3, 1]}, facecolor="#1e1e2e"
         )
-        self.fig.subplots_adjust(hspace=0.05, bottom=0.12)
+        self.fig.subplots_adjust(hspace=0.05, bottom=0.12, right=0.86)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         self._ch_vp = self._ch_vv = self._ch_hp = self._ch_hv = None
+        self._val_text = None
+        self._val_df = None
+        self._val_dates = None
         self._drag_press_x       = None
         self._drag_xlim          = None
         self._programmatic_select = False
+        self._view_end           = None   # 表示最終日（None=データの最終日）
+        self._view_code          = None
         self.canvas.mpl_connect("button_press_event",   self._on_button_press)
         self.canvas.mpl_connect("button_release_event", self._on_button_release)
         self.canvas.mpl_connect("motion_notify_event",  self._on_mouse_move)
@@ -661,6 +739,49 @@ class ChartApp(tk.Tk):
         self._ch_hp = self.ax_price.axhline(0, **kw)
         self._ch_hv = self.ax_vol.axhline(0, **kw)
 
+        # チャート右上（チャート外）の値表示（終値・MA5・MA5/MA25・MA25・MA75 を縦並び）
+        self._val_text = self.ax_price.text(
+            1.01, 1.0, "", transform=self.ax_price.transAxes, ha="left", va="top",
+            fontsize=14, color="#cdd6f4", linespacing=1.6, zorder=11)
+
+        # 日付ラベル（各チャート下端）・価格ラベル（各チャート左端）
+        tkw = dict(
+            color="#cdd6f4", fontsize=12, visible=False, zorder=11,
+            bbox=dict(boxstyle="square,pad=0.2", fc="#313244", ec="none", alpha=0.9),
+        )
+        self._ch_date = {}
+        self._ch_val = {}
+        for ax in (self.ax_price, self.ax_vol):
+            self._ch_date[ax] = ax.text(
+                0, 0, "", ha="center", va="bottom",
+                transform=blended_transform_factory(ax.transData, ax.transAxes), **tkw)
+            self._ch_val[ax] = ax.text(
+                0, 0, "", ha="left", va="center",
+                transform=blended_transform_factory(ax.transAxes, ax.transData), **tkw)
+
+    def _set_values(self, x=None):
+        """チャート上部に終値・MA5/25/75を表示する。x=None のときは表示最終日の値。"""
+        df = self._val_df
+        if df is None or self._val_text is None:
+            return
+        if x is None:
+            x = mdates.date2num(self._view_end)
+        i = int(self._val_dates.searchsorted(x + 0.5, side="right")) - 1   # x を含む日（x 以前で最後の日）
+        i = min(max(i, 0), len(df) - 1)
+        r = df.iloc[i]
+
+        def f(v):
+            return f"{v:,.1f}" if pd.notna(v) else "-"
+
+        ratio = f"{r['MA5'] / r['MA25']:.3f}" if pd.notna(r["MA5"]) and pd.notna(r["MA25"]) else "-"
+        self._val_text.set_text(
+            f"{r['Date']:%Y/%m/%d}\n"
+            f"終値  {f(r['Close'])}\n"
+            f"MA5  {f(r['MA5'])}\n"
+            f"MA5/MA25  {ratio}\n"
+            f"MA25  {f(r['MA25'])}\n"
+            f"MA75  {f(r['MA75'])}")
+
     def _on_scroll(self, event):
         if event.inaxes not in (self.ax_price, self.ax_vol):
             return
@@ -695,6 +816,7 @@ class ChartApp(tk.Tk):
                 dx = (event.x - self._drag_press_x) * (xlim[1] - xlim[0]) / ax_w
                 self.ax_price.set_xlim(xlim[0] - dx, xlim[1] - dx)
                 self.ax_vol.set_xlim(xlim[0] - dx, xlim[1] - dx)
+                update_period_title(self.ax_price)
             self.canvas.draw_idle()
             return
 
@@ -719,14 +841,45 @@ class ChartApp(tk.Tk):
             self._ch_hv.set_ydata([y])
             self._ch_hv.set_visible(True)
             self._ch_hp.set_visible(False)
+
+        # ラベル更新（マウスのあるチャートにのみ表示）
+        ax = event.inaxes
+        for other in (self.ax_price, self.ax_vol):
+            visible = other is ax
+            self._ch_date[other].set_visible(visible)
+            self._ch_val[other].set_visible(visible)
+        self._set_values(x)
+        self._ch_date[ax].set_x(x)
+        self._ch_date[ax].set_text(mdates.num2date(x).strftime("%Y/%m/%d"))
+        self._ch_val[ax].set_y(y)
+        self._ch_val[ax].set_text(f"{y:,.1f}" if ax is self.ax_price else f"{y:,.2f}")
         self.canvas.draw_idle()
 
     def _hide_crosshair(self):
         if self._ch_vp is None:
             return
-        for line in (self._ch_vp, self._ch_vv, self._ch_hp, self._ch_hv):
+        for line in (self._ch_vp, self._ch_vv, self._ch_hp, self._ch_hv,
+                     *self._ch_date.values(), *self._ch_val.values()):
             line.set_visible(False)
+        self._set_values(None)
         self.canvas.draw_idle()
+
+    def _on_key_date(self, event):
+        """←/→ で表示最終日を 1 日戻す／進める。"""
+        if isinstance(self.focus_get(), (ttk.Entry, tk.Entry, ttk.Combobox)):
+            return
+        if self._view_end is None:
+            return "break"
+        step = -1 if event.keysym == "Left" else 1
+        self._view_end = self._view_end + pd.Timedelta(days=step)
+        self._show_chart()
+        return "break"
+
+    def _on_analyze(self):
+        """分析（分類2の日の背景ハイライト）のON/OFFを切り替える。"""
+        self.analyze_on = not self.analyze_on
+        self.analyze_btn.config(bg="#b8e6a0" if self.analyze_on else "#89b4fa")
+        self._show_chart()
 
     def _show_chart(self):
         code = self.code_var.get().strip()
@@ -735,8 +888,23 @@ class ChartApp(tk.Tk):
         try:
             df = load_csv(code)
             name = next((n for c, n, *_ in self._codes if c == code), "")
-            draw_candlestick(self.ax_price, self.ax_vol, df, code, name, ratio=float(self.ratio_var.get()))
+            # 表示最終日：銘柄が変わったらデータの最終日に戻し、データ範囲内に収める
+            first, last = df["Date"].iloc[0], df["Date"].iloc[-1]
+            if code != self._view_code or self._view_end is None:
+                self._view_code = code
+                self._view_end = last
+            self._view_end = min(max(self._view_end, first), last)
+            draw_candlestick(self.ax_price, self.ax_vol, df, code, name,
+                             ratio=float(self.ratio_var.get()), view_end=self._view_end,
+                             highlight=self.analyze_on)
+            self._val_df = df.assign(
+                MA5=df["Close"].rolling(5).mean(),
+                MA25=df["Close"].rolling(25).mean(),
+                MA75=df["Close"].rolling(75).mean(),
+            )
+            self._val_dates = mdates.date2num(df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
             self._init_crosshair()
+            self._set_values(None)
             self.canvas.draw()
             self.status.config(text=f"{len(df)}件のデータを読み込みました")
         except FileNotFoundError as e:
