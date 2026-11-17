@@ -1,0 +1,57 @@
+{
+  "_readme": [
+    "分析ボタンの判定条件と背景色の設定。保存後、次回の再描画（分析ボタン/銘柄切替/キー操作）で反映される。",
+    "moving_averages: 使う単純移動平均の期間。MA5, MA25 のように条件式から参照できる。",
+    "条件式で使える名前: Open High Low Close Volume / MA<期間> / 上にある別ルールの name",
+    "rules は上から順に評価される。各ルールの項目:",
+    "  name   : ルール名（他の条件式やexcludeから参照できる）",
+    "  when   : 条件式（pandas.eval 形式。and / or / not 使用可）",
+    "  exclude: ここに挙げたルールが成立する日は、このルールの背景を塗らない",
+    "  color  : 背景色  alpha: 1回あたりの濃さ(0-1)  layers: 重ね塗り回数（濃さ調整）",
+    "  enabled: false で無効化（省略時 true。name の参照用には評価される）",
+    "candle_colors: ローソク足と出来高の色（up=終値>=始値の陽線、down=陰線）。",
+    "ルールの追加・削除・並べ替え、数値や色の変更は自由に行える。"
+  ],
+  "button_colors": { "on": "#b8e6a0", "off": "#89b4fa" },
+  "candle_colors": { "up": "#e74c3c", "down": "#80a0ff" },
+  "candle_colors_x": { "up": "#e74c3c", "down": "#2ecc71" },
+  "moving_averages": [5, 25, 75],
+  "rules": [
+    {
+      "name": "base",
+      "_comment": "上昇トレンドの基本条件",
+      "when": "MA5 * 1.02 > MA25 and MA25 > MA75",
+      "exclude": ["weak"],
+      "color_x": "#b8e6a0", 
+      "color": "#e09090", "alpha": 0.15, "layers": 1
+    },
+    {
+      "name": "strong",
+      "_comment": "強力な上昇トレンド",
+      "when": "base and MA5 * 0.98 < MA25",
+      "exclude": ["weak"],
+      "color_x": "#bceaa4", 
+      "color": "#f390ac", "alpha": 0.15, "layers": 2
+    },
+    {
+      "name": "strong_old",
+      "_comment": "旧設定",
+      "when": "base and MA5 * 0.98 < MA25",
+      "exclude": ["weak"],
+      "color": "#b8e6a0", "alpha": 0.15, "layers": 1
+    },
+    {
+      "name": "weak",
+      "_comment": "下降兆候",
+      "when": "strong and Close < MA25",
+      "color_x": "#f390ac",
+      "color": "#00ffff", "alpha": 0.15, "layers": 2
+    },
+    {
+      "name": "weak_old",
+      "_comment": "旧設定",
+      "when": "strong and Close < MA25",
+      "color": "#f38ba8", "alpha": 0.15, "layers": 2
+    }
+  ]
+}

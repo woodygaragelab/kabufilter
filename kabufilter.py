@@ -7,6 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
+import json
 import os
 import signal
 import threading
@@ -81,19 +82,65 @@ def update_period_title(ax_price):
     ax_price.set_title(f"{d0}-{d1}", loc="right", fontsize=14)
 
 
-def highlight_masks(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """分析用の判定を返す。
-    base:   MA5*1.02 > MA25 > MA75
-    strong: base かつ MA5*0.98 < MA25
-    weak:   strong かつ 終値 < MA25
-    """
-    ma5 = df["Close"].rolling(5).mean()
-    ma25 = df["Close"].rolling(25).mean()
-    ma75 = df["Close"].rolling(75).mean()
-    base = (ma5 * 1.02 > ma25) & (ma25 > ma75)
-    strong = base & (ma5 * 0.98 < ma25)
-    weak = strong & (df["Close"] < ma25)
-    return base, strong, weak
+RULES_PATH = os.path.join(CHART_DIR, "analysis_rules.json")
+_rules_cache = {"mtime": None, "data": None}
+
+
+def load_analysis_rules() -> dict:
+    """analysis_rules.json を読み込む（更新日時が変わったときだけ再読込）。"""
+    mtime = os.path.getmtime(RULES_PATH)
+    if _rules_cache["mtime"] != mtime:
+        with open(RULES_PATH, encoding="utf-8") as f:
+            _rules_cache["data"] = json.load(f)
+        _rules_cache["mtime"] = mtime
+    return _rules_cache["data"]
+
+
+def analysis_button_color(on: bool) -> str:
+    try:
+        colors = load_analysis_rules().get("button_colors", {})
+    except Exception:
+        colors = {}
+    return colors.get("on", "#b8e6a0") if on else colors.get("off", "#89b4fa")
+
+
+def candle_colors() -> tuple[str, str]:
+    """ローソク足（出来高含む）の (陽線色, 陰線色)。設定がなければ既定色。"""
+    try:
+        c = load_analysis_rules().get("candle_colors", {})
+    except Exception:
+        c = {}
+    return c.get("up", "#e74c3c"), c.get("down", "#2ecc71")
+
+
+def highlight_layers(df: pd.DataFrame, rules: dict | None = None) -> list[tuple]:
+    """設定ファイルのルールを評価し、描画用の [(mask, color, alpha), ...] を返す。"""
+    rules = rules or load_analysis_rules()
+    env = pd.DataFrame({c: df[c].to_numpy() for c in ("Open", "High", "Low", "Close", "Volume") if c in df})
+    for n in rules.get("moving_averages", []):
+        env[f"MA{int(n)}"] = df["Close"].rolling(int(n)).mean().to_numpy()
+
+    matched = {}
+    for r in rules["rules"]:
+        name = r["name"]
+        try:
+            m = env.eval(r["when"], engine="python")
+        except Exception as e:
+            raise ValueError(f"ルール '{name}' の条件式が不正です: {r['when']} ({e})") from e
+        m = pd.Series(m, index=env.index).fillna(False).astype(bool)
+        matched[name] = m
+        env[name] = m
+
+    layers = []
+    for r in rules["rules"]:
+        if not r.get("enabled", True):
+            continue
+        m = matched[r["name"]]
+        for ex in r.get("exclude", []):
+            m = m & ~matched[ex]
+        layer = (m.to_numpy(), r.get("color", "#b8e6a0"), float(r.get("alpha", 0.15)))
+        layers.extend([layer] * int(r.get("layers", 1)))
+    return layers
 
 
 def _span_runs(ax_list, dates, mask, alpha, color="#b8e6a0"):
@@ -119,23 +166,14 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
     dates = mdates.date2num(df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
     width = 0.6
 
-    # 条件に合う日の背景を明るくする（連続する日はまとめて1つの帯にする）
+    # 条件に合う日の背景を塗る（条件・色は analysis_rules.json）
     if highlight:
-        base, strong, weak = highlight_masks(df)
-        axes = (ax_price, ax_vol)
-        # weak（終値 < MA25）の日は赤系だけで描き、黄緑とは混ぜない
-        green_base = (base & ~weak).to_numpy()
-        green_strong = (strong & ~weak).to_numpy()
-        red = weak.to_numpy()
-        _span_runs(axes, dates, green_base, 0.15)
-        # strong は重ね塗りでさらに明るくする
-        _span_runs(axes, dates, green_strong, 0.15)
-        # weak は赤系を2回重ね塗りして、黄緑の strong と同じ明るさにする
-        _span_runs(axes, dates, red, 0.15, color="#f38ba8")
-        _span_runs(axes, dates, red, 0.15, color="#f38ba8")
+        for mask, color, alpha in highlight_layers(df):
+            _span_runs((ax_price, ax_vol), dates, mask, alpha, color)
 
+    up_color, down_color = candle_colors()
     for date, row in zip(dates, df.itertuples()):
-        color = "#e74c3c" if row.Close >= row.Open else "#2ecc71"
+        color = up_color if row.Close >= row.Open else down_color
 
         # ローソク足の実体
         body_low = min(row.Open, row.Close)
@@ -158,7 +196,7 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
         )
 
         # 売買高（Volume × Close、億円単位）
-        vol_color = "#e74c3c" if row.Close >= row.Open else "#2ecc71"
+        vol_color = up_color if row.Close >= row.Open else down_color
         turnover = (
             row.Volume * row.Close / 1e8
             if hasattr(row, "Volume") and pd.notna(row.Volume)
@@ -878,7 +916,7 @@ class ChartApp(tk.Tk):
     def _on_analyze(self):
         """分析（分類2の日の背景ハイライト）のON/OFFを切り替える。"""
         self.analyze_on = not self.analyze_on
-        self.analyze_btn.config(bg="#b8e6a0" if self.analyze_on else "#89b4fa")
+        self.analyze_btn.config(bg=analysis_button_color(self.analyze_on))
         self._show_chart()
 
     def _show_chart(self):
