@@ -9,6 +9,7 @@ from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
 import json
 import os
+from datetime import datetime
 import signal
 import threading
 import yfinance as yf
@@ -113,6 +114,36 @@ def candle_colors() -> tuple[str, str]:
     return c.get("up", "#e74c3c"), c.get("down", "#2ecc71")
 
 
+def nikkei_colors() -> tuple[str, float]:
+    """日経平均の折れ線の (色, 不透明度)。設定がなければ既定値。"""
+    try:
+        c = load_analysis_rules().get("nikkei_colors", {})
+    except Exception:
+        c = {}
+    return c.get("line", "#f9e2af"), float(c.get("alpha", 0.8))
+
+
+NIKKEI_CODE = "N225"
+
+
+def download_nikkei():
+    """日経平均(^N225)を取得して data/N225.csv に保存する。"""
+    data = yf.download("^N225", period="800d", interval="1d", progress=False)
+    if data.empty:
+        raise ValueError("日経平均のデータ取得に失敗しました")
+    data.tail(400).to_csv(os.path.join(DATA_DIR, f"{NIKKEI_CODE}.csv"))
+
+
+def ensure_nikkei():
+    """data/N225.csv が無い、または今日更新していなければダウンロードする。"""
+    path = os.path.join(DATA_DIR, f"{NIKKEI_CODE}.csv")
+    if os.path.exists(path):
+        updated = datetime.fromtimestamp(os.path.getmtime(path)).date()
+        if updated == datetime.today().date():
+            return
+    download_nikkei()
+
+
 def highlight_layers(df: pd.DataFrame, rules: dict | None = None) -> list[tuple]:
     """設定ファイルのルールを評価し、描画用の [(mask, color, alpha), ...] を返す。"""
     rules = rules or load_analysis_rules()
@@ -159,9 +190,14 @@ def _span_runs(ax_list, dates, mask, alpha, color="#b8e6a0"):
 
 
 def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = "", ratio: float = 2.0, view_end=None,
-                     highlight: bool = False):
+                     highlight: bool = False, ax_nk=None, nk_df: pd.DataFrame | None = None):
     ax_price.clear()
     ax_vol.clear()
+    if ax_nk is not None:
+        ax_nk.clear()
+        ax_nk.set_visible(nk_df is not None)
+        ax_nk.xaxis.set_visible(False)
+        ax_nk.patch.set_visible(False)
 
     dates = mdates.date2num(df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
     width = 0.6
@@ -240,6 +276,25 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
     y_top = price_max + margin
     y_bottom = (vdf["Low"].min() - margin) if ratio <= 1.0 else (y_top / ratio)
     ax_price.set_ylim(y_bottom, y_top)
+
+    # 日経平均（右軸に重ねる。縦軸は表示期間内の日経自身の範囲）
+    if ax_nk is not None and nk_df is not None:
+        nk_dates = mdates.date2num(nk_df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
+        nk_color, nk_alpha = nikkei_colors()
+        ax_nk.plot(nk_dates, nk_df["Close"].to_numpy(), color=nk_color, alpha=nk_alpha,
+                   linewidth=1.2, zorder=5)
+        nk_vis = (nk_dates >= start_num) & (nk_dates <= end_num)
+        nk_close = nk_df["Close"][nk_vis] if nk_vis.any() else nk_df["Close"]
+        nk_lo, nk_hi = nk_close.min(), nk_close.max()
+        nk_margin = (nk_hi - nk_lo) * 0.05 or nk_hi * 0.01
+        ax_nk.set_ylim(nk_lo - nk_margin, nk_hi + nk_margin)
+        ax_nk.set_xlim(ax_price.get_xlim())
+        ax_nk.set_ylabel("日経平均", fontsize=16, color=nk_color)
+        ax_nk.tick_params(axis="y", labelsize=15, colors=nk_color)
+        ax_nk.yaxis.set_label_position("right")
+        ax_nk.yaxis.tick_right()
+        ax_nk.patch.set_visible(False)
+
     ax_price.set_title(f"{code}  {name}", fontsize=19)
     update_period_title(ax_price)
     ax_price.set_ylabel("価格", fontsize=16)
@@ -465,11 +520,20 @@ class ChartApp(tk.Tk):
         )
         self.analyze_btn.pack(side=tk.LEFT, padx=4)
 
+        self.nikkei_on = False
+        self.nikkei_btn = tk.Button(
+            chart_top, text="日経", command=self._on_nikkei,
+            bg="#89b4fa", fg="#1e1e2e", font=("", 17, "bold"), relief=tk.FLAT, padx=10,
+        )
+        self.nikkei_btn.pack(side=tk.LEFT, padx=4)
+
         plt.style.use("dark_background")
         self.fig, (self.ax_price, self.ax_vol) = plt.subplots(
             2, 1, figsize=(10, 6), gridspec_kw={"height_ratios": [3, 1]}, facecolor="#1e1e2e"
         )
-        self.fig.subplots_adjust(hspace=0.05, bottom=0.12, right=0.86)
+        self.ax_nk = self.ax_price.twinx()   # 日経平均を重ねる右軸（OFF時は非表示）
+        self.ax_nk.set_visible(False)
+        self.fig.subplots_adjust(hspace=0.05, bottom=0.12, right=0.80)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -478,7 +542,9 @@ class ChartApp(tk.Tk):
         self._val_text = None
         self._val_df = None
         self._val_dates = None
-        self._drag_press_x       = None
+        self._nk_df = None
+        self._nk_dates = None
+        self._drag_press_x      = None
         self._drag_xlim          = None
         self._programmatic_select = False
         self._view_end           = None   # 表示最終日（None=データの最終日）
@@ -705,8 +771,11 @@ class ChartApp(tk.Tk):
         self.update_idletasks()
 
         def task():
-            from datetime import datetime
             errors = []
+            try:
+                ensure_nikkei()
+            except Exception:
+                pass   # 日経の取得失敗は個別株の更新を妨げない
             for i, code in enumerate(codes, 1):
                 self.after(0, lambda i=i, c=code: self.status.config(
                     text=f"{i} / {total}  {c} ダウンロード中..."))
@@ -752,6 +821,10 @@ class ChartApp(tk.Tk):
 
         def task():
             try:
+                try:
+                    ensure_nikkei()
+                except Exception:
+                    pass   # 日経の取得失敗は個別株の更新を妨げない（日経ON時に表示側でエラー表示）
                 ticker = f"{code}.T"
                 data = yf.download(ticker, period="800d", interval="1d", progress=False)
                 if data.empty:
@@ -759,7 +832,6 @@ class ChartApp(tk.Tk):
                     return
                 data = data.tail(400)
                 data.to_csv(os.path.join(DATA_DIR, f"{code}.csv"))
-                from datetime import datetime
                 self._update_excel_row(code, {"DataDate": datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)})
                 self._save_stats(code, load_csv(code))
                 self.after(0, self._refresh_listbox)
@@ -779,7 +851,7 @@ class ChartApp(tk.Tk):
 
         # チャート右上（チャート外）の値表示（終値・MA5・MA5/MA25・MA25・MA75 を縦並び）
         self._val_text = self.ax_price.text(
-            1.01, 1.0, "", transform=self.ax_price.transAxes, ha="left", va="top",
+            1.13, 1.0, "", transform=self.ax_price.transAxes, ha="left", va="top",
             fontsize=14, color="#cdd6f4", linespacing=1.6, zorder=11)
 
         # 日付ラベル（各チャート下端）・価格ラベル（各チャート左端）
@@ -812,16 +884,24 @@ class ChartApp(tk.Tk):
             return f"{v:,.1f}" if pd.notna(v) else "-"
 
         ratio = f"{r['MA5'] / r['MA25']:.3f}" if pd.notna(r["MA5"]) and pd.notna(r["MA25"]) else "-"
-        self._val_text.set_text(
-            f"{r['Date']:%Y/%m/%d}\n"
-            f"終値  {f(r['Close'])}\n"
-            f"MA5  {f(r['MA5'])}\n"
-            f"MA5/MA25  {ratio}\n"
-            f"MA25  {f(r['MA25'])}\n"
-            f"MA75  {f(r['MA75'])}")
+        text = (f"{r['Date']:%Y/%m/%d}\n"
+                f"終値  {f(r['Close'])}\n"
+                f"MA5  {f(r['MA5'])}\n"
+                f"MA5/MA25  {ratio}\n"
+                f"MA25  {f(r['MA25'])}\n"
+                f"MA75  {f(r['MA75'])}")
+        if self._nk_df is not None and self._nk_dates is not None:
+            j = int(self._nk_dates.searchsorted(x + 0.5, side="right")) - 1
+            if j >= 0:
+                text += f"\n日経  {f(self._nk_df['Close'].iloc[j])}"
+        self._val_text.set_text(text)
+
+    def _event_axes(self, event):
+        """イベントのある軸。重ねた日経の右軸（ax_nk）は価格軸として扱う。"""
+        return self.ax_price if event.inaxes is self.ax_nk else event.inaxes
 
     def _on_scroll(self, event):
-        if event.inaxes not in (self.ax_price, self.ax_vol):
+        if self._event_axes(event) not in (self.ax_price, self.ax_vol):
             return
         ratios = ["1.5", "2.0", "3.0", "4.0"]
         cur = self.ratio_var.get()
@@ -834,7 +914,7 @@ class ChartApp(tk.Tk):
         self._show_chart()
 
     def _on_button_press(self, event):
-        if event.button == 1 and event.inaxes in (self.ax_price, self.ax_vol):
+        if event.button == 1 and self._event_axes(event) in (self.ax_price, self.ax_vol):
             self._drag_press_x = event.x
             self._drag_xlim    = self.ax_price.get_xlim()
             self.canvas.get_tk_widget().config(cursor="fleur")
@@ -861,17 +941,21 @@ class ChartApp(tk.Tk):
         # クロスヘア更新
         if self._ch_vp is None:
             return
-        if event.inaxes not in (self.ax_price, self.ax_vol):
+        ax = self._event_axes(event)
+        if ax not in (self.ax_price, self.ax_vol):
             self._hide_crosshair()
             return
         x, y = event.xdata, event.ydata
         if x is None or y is None:
             return
+        if event.inaxes is self.ax_nk:
+            # ydata は日経側の値なので、価格軸の値に変換し直す
+            x, y = self.ax_price.transData.inverted().transform((event.x, event.y))
         self._ch_vp.set_xdata([x])
         self._ch_vv.set_xdata([x])
         self._ch_vp.set_visible(True)
         self._ch_vv.set_visible(True)
-        if event.inaxes == self.ax_price:
+        if ax is self.ax_price:
             self._ch_hp.set_ydata([y])
             self._ch_hp.set_visible(True)
             self._ch_hv.set_visible(False)
@@ -881,7 +965,6 @@ class ChartApp(tk.Tk):
             self._ch_hp.set_visible(False)
 
         # ラベル更新（マウスのあるチャートにのみ表示）
-        ax = event.inaxes
         for other in (self.ax_price, self.ax_vol):
             visible = other is ax
             self._ch_date[other].set_visible(visible)
@@ -919,12 +1002,26 @@ class ChartApp(tk.Tk):
         self.analyze_btn.config(bg=analysis_button_color(self.analyze_on))
         self._show_chart()
 
+    def _on_nikkei(self):
+        """日経平均の重ね表示のON/OFFを切り替える。"""
+        self.nikkei_on = not self.nikkei_on
+        self.nikkei_btn.config(bg=analysis_button_color(self.nikkei_on))
+        self._show_chart()
+
+    def _load_nikkei(self) -> pd.DataFrame | None:
+        """日経ON時のみ日経平均を読み込む（無い／古ければダウンロード）。"""
+        if not self.nikkei_on:
+            return None
+        ensure_nikkei()
+        return load_csv(NIKKEI_CODE)
+
     def _show_chart(self):
         code = self.code_var.get().strip()
         if not code:
             return
         try:
             df = load_csv(code)
+            nk_df = self._load_nikkei()
             name = next((n for c, n, *_ in self._codes if c == code), "")
             # 表示最終日：銘柄が変わったらデータの最終日に戻し、データ範囲内に収める
             first, last = df["Date"].iloc[0], df["Date"].iloc[-1]
@@ -934,7 +1031,10 @@ class ChartApp(tk.Tk):
             self._view_end = min(max(self._view_end, first), last)
             draw_candlestick(self.ax_price, self.ax_vol, df, code, name,
                              ratio=float(self.ratio_var.get()), view_end=self._view_end,
-                             highlight=self.analyze_on)
+                             highlight=self.analyze_on, ax_nk=self.ax_nk, nk_df=nk_df)
+            self._nk_df = nk_df
+            self._nk_dates = (mdates.date2num(nk_df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
+                              if nk_df is not None else None)
             self._val_df = df.assign(
                 MA5=df["Close"].rolling(5).mean(),
                 MA25=df["Close"].rolling(25).mean(),

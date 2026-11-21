@@ -10,35 +10,30 @@
     "  color  : 背景色  alpha: 1回あたりの濃さ(0-1)  layers: 重ね塗り回数（濃さ調整）",
     "  enabled: false で無効化（省略時 true。name の参照用には評価される）",
     "candle_colors: ローソク足と出来高の色（up=終値>=始値の陽線、down=陰線）。",
+    "nikkei_colors: 日経平均ボタンON時に価格チャートへ重ねる折れ線（右軸）の色（line）と不透明度（alpha, 0-1）。",
     "ルールの追加・削除・並べ替え、数値や色の変更は自由に行える。"
   ],
   "button_colors": { "on": "#b8e6a0", "off": "#89b4fa" },
   "candle_colors": { "up": "#e74c3c", "down": "#80a0ff" },
   "candle_colors_x": { "up": "#e74c3c", "down": "#2ecc71" },
+  "nikkei_colors": { "line": "#f9e2af", "alpha": 0.8 },
   "moving_averages": [5, 25, 75],
   "rules": [
     {
       "name": "base",
-      "_comment": "上昇トレンドの基本条件",
+      "_comment": "上昇トレンド",
       "when": "MA5 * 1.02 > MA25 and MA25 > MA75",
       "exclude": ["weak"],
       "color_x": "#b8e6a0", 
-      "color": "#e09090", "alpha": 0.15, "layers": 1
+      "color": "#f390ac", "alpha": 0.30, "layers": 1
     },
     {
       "name": "strong",
-      "_comment": "強力な上昇トレンド",
+      "_comment": "上昇兆候",
       "when": "base and MA5 * 0.98 < MA25",
       "exclude": ["weak"],
       "color_x": "#bceaa4", 
       "color": "#f390ac", "alpha": 0.15, "layers": 2
-    },
-    {
-      "name": "strong_old",
-      "_comment": "旧設定",
-      "when": "base and MA5 * 0.98 < MA25",
-      "exclude": ["weak"],
-      "color": "#b8e6a0", "alpha": 0.15, "layers": 1
     },
     {
       "name": "weak",
@@ -48,10 +43,23 @@
       "color": "#00ffff", "alpha": 0.15, "layers": 2
     },
     {
+      "name": "short",
+      "_comment": "売",
+      "when": "Close > MA5 and Close < MA25 and MA5 < MA25 and MA25 < MA75",
+      "color": "#6090ff", "alpha": 0.15, "layers": 1
+    },
+    {
       "name": "weak_old",
       "_comment": "旧設定",
       "when": "strong and Close < MA25",
       "color": "#f38ba8", "alpha": 0.15, "layers": 2
+    },
+    {
+      "name": "strong_old",
+      "_comment": "旧設定",
+      "when": "base and MA5 * 0.98 < MA25",
+      "exclude": ["weak"],
+      "color": "#b8e6a0", "alpha": 0.15, "layers": 1
     }
   ]
 }
