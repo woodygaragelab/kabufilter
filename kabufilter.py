@@ -21,7 +21,17 @@ matplotlib.rcParams["font.family"] = ["Yu Gothic", "Meiryo", "MS Gothic", "DejaV
 CHART_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(CHART_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
-VIEW_DAYS = 365  # チャートの表示期間（表示最終日までの日数）
+VIEW_DAYS_CHOICES = ["200", "75", "25"]  # 横倍率の選択肢（表示する営業日数）
+VIEW_DAYS_DEFAULT = "200"
+
+
+def view_start_num(dates, end_num: float, days: int) -> float:
+    """表示最終日 end_num を含めて days 営業日分さかのぼった日の日付番号を返す。
+    dates は昇順の日付番号の配列。データが足りなければ先頭の日付を返す。"""
+    idx = int((dates <= end_num).sum())  # 表示最終日までの本数
+    if idx == 0:
+        return end_num - days
+    return float(dates[max(idx - days, 0)])
 
 def load_csv(code: str) -> pd.DataFrame:
     filename = os.path.join(DATA_DIR, f"{code}.csv")
@@ -208,7 +218,8 @@ def _span_runs(ax_list, dates, mask, alpha, color="#b8e6a0"):
 
 
 def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = "", ratio: float = 2.0, view_end=None,
-                     highlight: bool = False, ax_nk=None, nk_df: pd.DataFrame | None = None):
+                     highlight: bool = False, ax_nk=None, nk_df: pd.DataFrame | None = None,
+                     view_days: int = 200):
     ax_price.clear()
     ax_vol.clear()
     if ax_nk is not None:
@@ -281,10 +292,10 @@ def draw_candlestick(ax_price, ax_vol, df: pd.DataFrame, code: str, name: str = 
     ax_price.legend(fontsize=12, loc="upper left")
 
     # 軸設定
-    # 表示期間：表示最終日までの VIEW_DAYS 日分（縦軸も表示期間内のデータで決める）
+    # 表示期間：表示最終日までの view_days 営業日分（縦軸も表示期間内のデータで決める）
     end_num = mdates.date2num(view_end if view_end is not None else df["Date"].iloc[-1])
-    start_num = end_num - VIEW_DAYS
-    ax_price.set_xlim(start_num, end_num + 1)
+    start_num = view_start_num(dates, end_num, view_days)
+    ax_price.set_xlim(start_num - 1, end_num + 1)
     vis = (dates >= start_num) & (dates <= end_num)
     if not vis.any():
         vis[:] = True
@@ -364,6 +375,9 @@ class ChartApp(tk.Tk):
     def _build_ui(self):
         self.code_var  = tk.StringVar(value="7203")
         self.ratio_var = tk.StringVar(value="4.0")
+        self.days_var  = tk.StringVar(value=VIEW_DAYS_DEFAULT)
+        # コンボボックスのドロップダウン（選択肢一覧）の文字サイズ
+        self.option_add("*TCombobox*Listbox.font", ("", 20))
 
         # メインエリア（左リスト＋右チャート）
         content = tk.Frame(self, bg="#1e1e2e")
@@ -521,13 +535,13 @@ class ChartApp(tk.Tk):
         tk.Checkbutton(chart_top, text="出来高(1)", variable=self.chart_cat1_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(8, 4))
 
-        # 左：ステータス → 倍率
+        # 左：ステータス → 縦倍率 → 横倍率
         self.status = tk.Label(
             chart_top, text="", bg="#1e1e2e", fg="#f38ba8", font=("", 16)
         )
         self.status.pack(side=tk.LEFT, padx=(0, 10))
 
-        tk.Label(chart_top, text="倍率:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
+        tk.Label(chart_top, text="縦倍率:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
             side=tk.LEFT, padx=(8, 0)
         )
         ratio_cb = ttk.Combobox(
@@ -536,6 +550,19 @@ class ChartApp(tk.Tk):
         )
         ratio_cb.pack(side=tk.LEFT, padx=4)
         ratio_cb.bind("<<ComboboxSelected>>", lambda _: self._show_chart())
+
+        tk.Label(chart_top, text="横倍率:", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        days_cb = ttk.Combobox(
+            chart_top, textvariable=self.days_var,
+            values=VIEW_DAYS_CHOICES, width=4, font=("", 17), state="readonly"
+        )
+        days_cb.pack(side=tk.LEFT, padx=4)
+        days_cb.bind("<<ComboboxSelected>>", lambda _: self._show_chart())
+        tk.Label(chart_top, text="日", bg="#1e1e2e", fg="#cdd6f4", font=("", 17)).pack(
+            side=tk.LEFT, padx=(0, 4)
+        )
 
         self.analyze_on = False
         self.analyze_btn = tk.Button(
@@ -1091,7 +1118,8 @@ class ChartApp(tk.Tk):
             self._view_end = min(max(self._view_end, first), last)
             draw_candlestick(self.ax_price, self.ax_vol, df, code, name,
                              ratio=float(self.ratio_var.get()), view_end=self._view_end,
-                             highlight=self.analyze_on, ax_nk=self.ax_nk, nk_df=nk_df)
+                             highlight=self.analyze_on, ax_nk=self.ax_nk, nk_df=nk_df,
+                             view_days=int(self.days_var.get()))
             self._nk_df = nk_df
             self._nk_dates = (mdates.date2num(nk_df["Date"].to_numpy().astype("datetime64[ms]").astype(object))
                               if nk_df is not None else None)
