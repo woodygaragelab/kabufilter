@@ -14,6 +14,7 @@ import signal
 import threading
 import yfinance as yf
 import matplotlib
+from rules_editor import RulesEditor
 
 matplotlib.rcParams["font.family"] = ["Yu Gothic", "Meiryo", "MS Gothic", "DejaVu Sans"]
 
@@ -144,9 +145,8 @@ def ensure_nikkei():
     download_nikkei()
 
 
-def highlight_layers(df: pd.DataFrame, rules: dict | None = None) -> list[tuple]:
-    """設定ファイルのルールを評価し、描画用の [(mask, color, alpha), ...] を返す。"""
-    rules = rules or load_analysis_rules()
+def eval_rules(df: pd.DataFrame, rules: dict) -> dict:
+    """全ルールの when を評価し、{ルール名: bool の Series} を返す（exclude は未適用）。"""
     env = pd.DataFrame({c: df[c].to_numpy() for c in ("Open", "High", "Low", "Close", "Volume") if c in df})
     for n in rules.get("moving_averages", []):
         env[f"MA{int(n)}"] = df["Close"].rolling(int(n)).mean().to_numpy()
@@ -161,6 +161,24 @@ def highlight_layers(df: pd.DataFrame, rules: dict | None = None) -> list[tuple]
         m = pd.Series(m, index=env.index).fillna(False).astype(bool)
         matched[name] = m
         env[name] = m
+    return matched
+
+
+def rule_mask(df: pd.DataFrame, name: str, rules: dict | None = None):
+    """背景に塗られる日（when が成立し、exclude のルールが不成立の日）の bool Series。"""
+    rules = rules or load_analysis_rules()
+    matched = eval_rules(df, rules)
+    rule = next(r for r in rules["rules"] if r["name"] == name)
+    m = matched[name]
+    for ex in rule.get("exclude", []):
+        m = m & ~matched[ex]
+    return m
+
+
+def highlight_layers(df: pd.DataFrame, rules: dict | None = None) -> list[tuple]:
+    """設定ファイルのルールを評価し、描画用の [(mask, color, alpha), ...] を返す。"""
+    rules = rules or load_analysis_rules()
+    matched = eval_rules(df, rules)
 
     layers = []
     for r in rules["rules"]:
@@ -362,6 +380,7 @@ class ChartApp(tk.Tk):
         self.cat2_var = tk.BooleanVar(value=True)
         self.cat3_var = tk.BooleanVar(value=True)
         self.cat4_var = tk.BooleanVar(value=True)
+        self.cat5_var = tk.BooleanVar(value=True)
         ckb_opts = dict(bg="#181825", fg="#cdd6f4", selectcolor="#181825",
                         activebackground="#181825", activeforeground="#cdd6f4",
                         font=("", 14), command=self._apply_filter)
@@ -372,6 +391,8 @@ class ChartApp(tk.Tk):
         tk.Checkbutton(cb_frame, text="3", variable=self.cat3_var, **ckb_opts).pack(
             side=tk.LEFT, padx=(4, 4))
         tk.Checkbutton(cb_frame, text="4", variable=self.cat4_var, **ckb_opts).pack(
+            side=tk.LEFT, padx=(4, 4))
+        tk.Checkbutton(cb_frame, text="5", variable=self.cat5_var, **ckb_opts).pack(
             side=tk.LEFT, padx=(4, 8))
         tk.Button(
             cb_frame,
@@ -481,6 +502,7 @@ class ChartApp(tk.Tk):
             relief=tk.FLAT,
             padx=10,
         ).pack(side=tk.RIGHT, padx=(0, 4))
+        self.chart_cat5_var = tk.BooleanVar()
         self.chart_cat4_var = tk.BooleanVar()
         self.chart_cat3_var = tk.BooleanVar()
         self.chart_cat2_var = tk.BooleanVar()
@@ -488,9 +510,11 @@ class ChartApp(tk.Tk):
         ckb_opts = dict(bg="#1e1e2e", fg="#cdd6f4", selectcolor="#1e1e2e",
                         activebackground="#1e1e2e", activeforeground="#cdd6f4",
                         font=("", 14), command=self._on_chart_cat_toggle)
-        tk.Checkbutton(chart_top, text="監視(4)", variable=self.chart_cat4_var, **ckb_opts).pack(
+        tk.Checkbutton(chart_top, text="監視(5)", variable=self.chart_cat5_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
-        tk.Checkbutton(chart_top, text="注目(3)", variable=self.chart_cat3_var, **ckb_opts).pack(
+        tk.Checkbutton(chart_top, text="注目(4)", variable=self.chart_cat4_var, **ckb_opts).pack(
+            side=tk.RIGHT, padx=(0, 4))
+        tk.Checkbutton(chart_top, text="前兆(3)", variable=self.chart_cat3_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
         tk.Checkbutton(chart_top, text="上昇(2)", variable=self.chart_cat2_var, **ckb_opts).pack(
             side=tk.RIGHT, padx=(0, 4))
@@ -519,6 +543,12 @@ class ChartApp(tk.Tk):
             bg="#89b4fa", fg="#1e1e2e", font=("", 17, "bold"), relief=tk.FLAT, padx=10,
         )
         self.analyze_btn.pack(side=tk.LEFT, padx=4)
+
+        self._rules_dlg = None
+        tk.Button(
+            chart_top, text="⚙", command=self._open_rules_editor,
+            bg="#89b4fa", fg="#1e1e2e", font=("", 17, "bold"), relief=tk.FLAT, padx=6,
+        ).pack(side=tk.LEFT, padx=(0, 4))
 
         self.nikkei_on = False
         self.nikkei_btn = tk.Button(
@@ -650,6 +680,7 @@ class ChartApp(tk.Tk):
         cb2 = self.cat2_var.get()
         cb3 = self.cat3_var.get()
         cb4 = self.cat4_var.get()
+        cb5 = self.cat5_var.get()
         self._filtered_codes = [
             (c, n, cat, dd) for c, n, cat, dd in self._codes
             if (not code_q or code_q in c.lower())
@@ -659,6 +690,7 @@ class ChartApp(tk.Tk):
             and (not cb2 or "2" in cat)
             and (not cb3 or "3" in cat)
             and (not cb4 or "4" in cat)
+            and (not cb5 or "5" in cat)
         ]
         # 選択コードを保存（tree 選択 → code_var の順で参照）
         sel = self.tree.selection()
@@ -694,12 +726,14 @@ class ChartApp(tk.Tk):
             self.chart_cat2_var.set("2" in val)
             self.chart_cat3_var.set("3" in val)
             self.chart_cat4_var.set("4" in val)
+            self.chart_cat5_var.set("5" in val)
         else:
             self.category_var.set("")
             self.chart_cat1_var.set(False)
             self.chart_cat2_var.set(False)
             self.chart_cat3_var.set(False)
             self.chart_cat4_var.set(False)
+            self.chart_cat5_var.set(False)
 
     def _update_excel_row(self, code: str, updates: dict):
         import openpyxl
@@ -746,7 +780,8 @@ class ChartApp(tk.Tk):
         cat = ("1" if self.chart_cat1_var.get() else "") + \
               ("2" if self.chart_cat2_var.get() else "") + \
               ("3" if self.chart_cat3_var.get() else "") + \
-              ("4" if self.chart_cat4_var.get() else "")
+              ("4" if self.chart_cat4_var.get() else "") + \
+              ("5" if self.chart_cat5_var.get() else "")
         self.category_var.set(cat)
         self._save_category()
 
@@ -1002,6 +1037,31 @@ class ChartApp(tk.Tk):
         self.analyze_btn.config(bg=analysis_button_color(self.analyze_on))
         self._show_chart()
 
+    def _open_rules_editor(self):
+        """analysis_rules.json の編集ダイアログを開く（開いていれば前面に出す）。"""
+        if self._rules_dlg is not None and self._rules_dlg.winfo_exists():
+            self._rules_dlg.lift()
+            return
+        try:
+            self._rules_dlg = RulesEditor(self, RULES_PATH, check=self._check_rules,
+                                          on_saved=self._on_rules_saved)
+        except Exception as e:
+            self.status.config(text=f"エラー: {e}")
+
+    def _check_rules(self, rules: dict):
+        """表示中の銘柄で条件式を評価してみる（データが無ければ省略）。不正なら例外。"""
+        try:
+            df = load_csv(self.code_var.get().strip())
+        except Exception:
+            return
+        highlight_layers(df, rules)
+
+    def _on_rules_saved(self):
+        _rules_cache["mtime"] = None
+        self.analyze_btn.config(bg=analysis_button_color(self.analyze_on))
+        self.nikkei_btn.config(bg=analysis_button_color(self.nikkei_on))
+        self._show_chart()
+
     def _on_nikkei(self):
         """日経平均の重ね表示のON/OFFを切り替える。"""
         self.nikkei_on = not self.nikkei_on
@@ -1057,7 +1117,15 @@ class ChartApp(tk.Tk):
             new_cat += "1"
         if stats.get("Trend"):
             new_cat += "2"
-        # 手動設定の分類3・4は保持する
+        # 分類3: 分析ルール strong の背景が最終日に付く（ルールが読めなければ従来値を引き継ぐ）
+        strong_last = None
+        try:
+            strong_last = bool(rule_mask(df, "strong").iloc[-1])
+        except Exception:
+            pass
+        if strong_last:
+            new_cat += "3"
+        # 手動設定の分類4・5（ルールが使えないときは3も）は保持する
         mc = self._read_excel()
         if mc is not None and "Category" in mc.columns:
             mc["Code"] = mc["Code"].str.zfill(4)
@@ -1065,7 +1133,8 @@ class ChartApp(tk.Tk):
             if not row.empty:
                 old = row["Category"].iloc[0]
                 old = "" if pd.isna(old) else str(old)
-                new_cat += "".join(c for c in "34" if c in old)
+                keep = "45" if strong_last is not None else "345"
+                new_cat += "".join(c for c in keep if c in old)
         stats["Category"] = new_cat
         self._update_excel_row(code, stats)
 

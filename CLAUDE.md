@@ -5,6 +5,7 @@
 
 ## 構成
 - `kabufilter.py`: 本体。`ChartApp`（GUI）、`load_csv`、`calc_stats`、`draw_candlestick`
+- `rules_editor.py`: `analysis_rules.json` の編集ダイアログ（`RulesEditor`、⚙ボタンから開く）と検証・整形の純粋関数
 - `analysis_rules.json`: 分析の判定条件と色の設定
 - `data/`: yfinance 形式の株価 CSV（git 管理外）
 - `my_codes.xlsx`, `my_codes_eps.xlsx`: 個人の銘柄リスト（git 管理外）
